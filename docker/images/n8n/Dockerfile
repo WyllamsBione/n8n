@@ -1,32 +1,36 @@
-ARG NODE_VERSION=20
-FROM n8nio/base:${NODE_VERSION}
+FROM node:16-alpine
 
 ARG N8N_VERSION
+
 RUN if [ -z "$N8N_VERSION" ] ; then echo "The N8N_VERSION argument is missing!" ; exit 1; fi
 
-LABEL org.opencontainers.image.title="n8n"
-LABEL org.opencontainers.image.description="Workflow Automation Tool"
-LABEL org.opencontainers.image.source="https://github.com/n8n-io/n8n"
-LABEL org.opencontainers.image.url="https://n8n.io"
-LABEL org.opencontainers.image.version=${N8N_VERSION}
+# Update everything and install needed dependencies
+RUN apk add --update graphicsmagick tzdata git tini su-exec
 
-ENV N8N_VERSION=${N8N_VERSION}
-ENV NODE_ENV=production
-ENV N8N_RELEASE_TYPE=stable
-RUN set -eux; \
-	npm install -g --omit=dev n8n@${N8N_VERSION} --ignore-scripts && \
-	npm rebuild --prefix=/usr/local/lib/node_modules/n8n sqlite3 && \
-	rm -rf /usr/local/lib/node_modules/n8n/node_modules/@n8n/chat && \
-	rm -rf /usr/local/lib/node_modules/n8n/node_modules/n8n-design-system && \
-	rm -rf /usr/local/lib/node_modules/n8n/node_modules/n8n-editor-ui/node_modules && \
-	find /usr/local/lib/node_modules/n8n -type f -name "*.ts" -o -name "*.js.map" -o -name "*.vue" | xargs rm -f && \
-	rm -rf /root/.npm
+# Set a custom user to not have n8n run as root
+USER root
 
-COPY docker-entrypoint.sh /
+# Install n8n and the packages it needs to build it correctly.
+RUN apk --update add --virtual build-dependencies python3 build-base ca-certificates && \
+	npm config set python "$(which python3)" && \
+	npm_config_user=root npm install -g full-icu n8n@${N8N_VERSION} && \
+	apk del build-dependencies \
+	&& rm -rf /root /tmp/* /var/cache/apk/* && mkdir /root;
 
-RUN \
-	mkdir .n8n && \
-	chown node:node .n8n
-ENV SHELL /bin/sh
-USER node
+
+# Install fonts
+RUN apk --no-cache add --virtual fonts msttcorefonts-installer fontconfig && \
+	update-ms-fonts && \
+	fc-cache -f && \
+	apk del fonts && \
+	find  /usr/share/fonts/truetype/msttcorefonts/ -type l -exec unlink {} \; \
+	&& rm -rf /root /tmp/* /var/cache/apk/* && mkdir /root
+
+ENV NODE_ICU_DATA /usr/local/lib/node_modules/full-icu
+
+WORKDIR /data
+
+COPY docker-entrypoint.sh /docker-entrypoint.sh
 ENTRYPOINT ["tini", "--", "/docker-entrypoint.sh"]
+
+EXPOSE 5678/tcp
